@@ -1,4 +1,3 @@
-# Файл: main.py
 import asyncio
 import os
 import logging
@@ -10,6 +9,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from dotenv import load_dotenv
+from aiohttp import web  # <--- Добавили импорт для веб-сервера
 
 from services.crm_api import SitniksAPI
 from formatter import format_order_report
@@ -47,16 +47,14 @@ def get_status_kb():
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear() # Сбрасываем состояние на старте
+    await state.clear() 
     await message.answer("👋 Выберите период:", reply_markup=get_main_kb())
 
-# Глобальный обработчик кнопки "Отмена" (работает всегда)
 @dp.message(F.text == "🔙 Отмена")
 async def global_cancel(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("🏠 Главное меню", reply_markup=get_main_kb())
 
-# 1. ВЧЕРА
 @dp.message(F.text == "📉 Вчера")
 async def report_yesterday(message: types.Message, state: FSMContext):
     yesterday = (datetime.now() - timedelta(days=1)).date()
@@ -64,7 +62,6 @@ async def report_yesterday(message: types.Message, state: FSMContext):
     await message.answer("Какой статус фильтровать?", reply_markup=get_status_kb())
     await state.set_state(ReportFlow.waiting_for_status)
 
-# 2. КОНКРЕТНАЯ ДАТА
 @dp.message(F.text == "📅 Конкретная дата")
 async def ask_date(message: types.Message, state: FSMContext):
     await message.answer("✍️ Введите дату (ДД.ММ):")
@@ -81,7 +78,6 @@ async def process_date(message: types.Message, state: FSMContext):
     except ValueError:
         await message.answer("⚠️ Ошибка. Нужен формат 10.01")
 
-# 3. ПЕРИОД
 @dp.message(F.text == "🗓 За период")
 async def ask_period(message: types.Message, state: FSMContext):
     await message.answer("✍️ Введите период (ДД.ММ-ДД.ММ):")
@@ -101,12 +97,10 @@ async def process_period(message: types.Message, state: FSMContext):
     except ValueError:
         await message.answer("⚠️ Ошибка. Нужен формат 01.01-05.01")
 
-# 4. ФИНАЛ: ГЕНЕРАЦИЯ ОТЧЕТА
 @dp.message(ReportFlow.waiting_for_status)
 async def generate_final_report(message: types.Message, state: FSMContext):
     status_choice = message.text.strip()
     
-    # Если нажали Отмена (хотя глобальный хендлер должен перехватить, но оставим для надежности)
     if status_choice == "🔙 Отмена":
         await state.clear()
         await message.answer("Отменено", reply_markup=get_main_kb())
@@ -116,7 +110,6 @@ async def generate_final_report(message: types.Message, state: FSMContext):
     d_start = data['date_start']
     d_end = data['date_end']
     
-    # Временное сообщение (удалим его потом)
     loading_msg = await message.answer(f"⏳ Ищу заказы '{status_choice}' за {d_start}...", reply_markup=types.ReplyKeyboardRemove())
     
     orders = await crm.get_report_orders(d_start, d_end, status_filter=status_choice)
@@ -125,17 +118,14 @@ async def generate_final_report(message: types.Message, state: FSMContext):
     header_add = f" (Статус: {status_choice})"
     text = format_order_report(orders, period_str + header_add)
     
-    # Удаляем сообщение "Загрузка..."
     try:
         await loading_msg.delete()
     except:
         pass
 
-    # Отправка длинного сообщения с ВОЗВРАТОМ КЛАВИАТУРЫ
     if len(text) > 4000:
         parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
         for index, part in enumerate(parts):
-            # Клавиатуру крепим ТОЛЬКО к последней части
             if index == len(parts) - 1:
                 await message.answer(part, parse_mode="Markdown", reply_markup=get_main_kb())
             else:
@@ -145,7 +135,25 @@ async def generate_final_report(message: types.Message, state: FSMContext):
         
     await state.clear()
 
+# --- ФЕЙКОВЫЙ ВЕБ-СЕРВЕР ДЛЯ RENDER ---
+async def keep_alive(request):
+    return web.Response(text="I am alive")
+
+async def start_server():
+    app = web.Application()
+    app.add_routes([web.get('/', keep_alive)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    # Render автоматически передает PORT. Если нет - берем 8080
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+# --- ЗАПУСК ---
 async def main():
+    # Сначала запускаем веб-сервер, чтобы Render увидел открытый порт
+    await start_server()
+    # Потом запускаем бота
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
