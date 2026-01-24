@@ -1,61 +1,64 @@
-def format_order_report(orders, period_str):
-    if not orders:
-        return "❌ Заказов за этот период (по дате активности) не найдено."
+# Файл: formatter.py
+from datetime import datetime
 
-    lines = [f"📊 **РЕЕСТР ЗАКАЗОВ**", f"📆 Период: {period_str}", ""]
+def format_order_report(orders, period_str, filter_status=""):
+    if not orders:
+        return f"📅 Период: {period_str}\n❌ Заказов со статусом '{filter_status}' не найдено."
+
+    # Считаем итоги сразу
+    total_count = len(orders)
+    total_sum = sum(float(o.get('totalPrice', 0)) for o in orders)
     
-    total_sum = 0
-    count = 0
+    # Определяем иконку для заголовка
+    icon = "📋"
+    if "відправлено" in filter_status.lower(): icon = "🚚"
+    elif "виконано" in filter_status.lower(): icon = "💰"
+
+    # === ЗАГОЛОВОК ===
+    lines = [
+        f"{icon} **ОТЧЕТ: {filter_status.upper()}**",
+        f"📅 Дата события: {period_str}",
+        f"📊 **Всего заказов: {total_count} шт.**",
+        f"💵 **На сумму: {total_sum:,.2f} UAH**".replace(",", " "),
+        "──────────────────"
+    ]
     
-    for order in orders:
-        count += 1
-        # Извлекаем данные безопасно
+    # === СПИСОК ЗАКАЗОВ ===
+    for i, order in enumerate(orders, 1):
         o_id = order.get('orderNumber') or order.get('id')
-        status = order.get('status', {}).get('title', 'Неизвестно')
+        
+        # Данные из CRM (для сверки)
+        crm_status = order.get('status', {}).get('title', 'Неизвестно')
+        
         client = order.get('client', {}) or {}
         client_name = client.get('fullname', 'Без имени')
-        client_phone = client.get('phone', 'Нет телефона')
         
-        # Цена
-        price = order.get('totalPrice', 0)
-        total_sum += float(price)
-        currency = "UAH" # Или брать из settings
-        
-        # Товары
+        # Товары (кратко)
         products = order.get('products', [])
-        prod_lines = []
-        for p in products:
-            title = p.get('title', 'Товар')
-            qty = p.get('quantity', 1)
-            prod_lines.append(f"{title} ({qty} шт)")
-        prod_str = ", ".join(prod_lines)
-        
-        # ТТН
-        ttn = "Нет ТТН"
-        delivery = order.get('npDelivery', {})
-        if delivery and delivery.get('billOfLading'):
-            ttn = delivery.get('billOfLading')
-        
-        # Дата для отображения (берем updatedAt или completedAt)
-        date_show = order.get('updatedAt', '')[:10]
-        if order.get('completedAt'):
-            date_show = order.get('completedAt', '')[:10]
+        # Если товаров много, пишем "Товар А + еще 2..."
+        if len(products) > 1:
+            prod_str = f"{products[0].get('title')} (+{len(products)-1})"
+        elif products:
+            prod_str = products[0].get('title')
+        else:
+            prod_str = "Без товара"
+            
+        ttn = order.get('delivery', {}).get('billOfLading') or \
+              order.get('npDelivery', {}).get('billOfLading') or \
+              "-"
 
-        # Сборка блока
+        # Компактный блок заказа
+        # 1. 1234 | Иванов И.И.
+        # 2. Товар... | 1500 UAH
+        # 3. ТТН: ... (Статус CRM: ...)
+        
         block = (
-            f"🔹 **#{o_id}** | {date_show}\n"
-            f"🔎 Статус: {status}\n"
-            f"📦 {prod_str}\n"
-            f"💰 {price} {currency}\n"
-            f"👤 {client_name} | 📞 {client_phone}\n"
-            f"🚚 ТТН: `{ttn}`\n"
-            f"────────────────"
+            f"**{i}. Заказ #{o_id}** | 👤 {client_name}\n"
+            f"📦 {prod_str} | 💰 {float(order.get('totalPrice', 0))} грн\n"
+            f"🎫 ТТН: `{ttn}`\n"
+            f"ℹ️ (В CRM сейчас: {crm_status})"
         )
         lines.append(block)
-
-    # Футер
-    lines.append("")
-    lines.append(f"∑ **Всего заказов:** {count}")
-    lines.append(f"💰 **Общая сумма:** {total_sum:.2f}")
+        lines.append("─ ─ ─ ─ ─") # Легкий разделитель
 
     return "\n".join(lines)
